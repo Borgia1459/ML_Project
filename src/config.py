@@ -1,0 +1,2 @@
+
+TRAINING = '../inputs/Resume.csv'
