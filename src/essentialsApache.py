@@ -5,6 +5,7 @@ from pyspark.ml import Pipeline
 from pyspark.ml.classification import LogisticRegression
 from pyspark.ml.evaluation import BinaryClassificationEvaluator
 from pyspark.sql.functions import col
+from pyspark.ml.feature import FeatureHasher
 
 class SparkDataProcessor:
     def __init__(self, app_name, master='local[*]'):
@@ -65,7 +66,7 @@ class SparkDataProcessor:
         return train, test
 
     def one_hot_encode(self, train, test):
-        #"""One-hot encode categorical variables in the training and test DataFrames."""
+        # One-hot encoding for categorical variables
         categorical = [c for c in train.columns if c != 'label']
         print('The following are the categorical variables:', categorical)
 
@@ -94,7 +95,7 @@ class SparkDataProcessor:
         train_encoded.show()
         test_encoded.show()
 
-        return train_encoded, test_encoded
+        return train_encoded, test_encoded, categorical
 
     def train_test_logic_regression_mode(self, train_encoded, test_encoded):
         # Train a logistic regression model on the training data
@@ -106,7 +107,7 @@ class SparkDataProcessor:
             train_predictions = lr_model.transform(train_encoded)
             train_predictions.cache()
             train_predictions.show()
-            print('\n we here now')
+            print('\n we here now! \n')
         
             # Make predictions on the test data
             test_predictions = lr_model.transform(test_encoded)
@@ -119,6 +120,53 @@ class SparkDataProcessor:
             return train_predictions, test_predictions
         except Exception as e:
             print(f"An error occurred: {e}")
+
+    def hashing_method(self, train, test, categorical):
+        """
+        Hash categorical features using FeatureHasher.
+
+        Parameters:
+        - train: DataFrame containing the training data.
+        - test: DataFrame containing the test data.
+        - categorical: List of categorical columns to hash.
+
+        Returns:
+        - train_hashed: DataFrame with hashed features for training data.
+        - test_hashed: DataFrame with hashed features for test data.
+        """
+        try:
+            # Validate input
+            if not categorical:
+                raise ValueError("No categorical columns provided for hashing.")
+            
+            # Initialize FeatureHasher
+            hasher = FeatureHasher(numFeatures=10000, inputCols=categorical, outputCol='features')
+            
+            # Transform the training and test data
+            train_hashed = hasher.transform(train).select('features')
+            test_hashed = hasher.transform(test).select('features')
+            
+            # Show the hashed features
+            print("Hashed Features for Training Data:")
+            train_hashed.show(truncate=False)
+            
+            print("Hashed Features for Test Data:")
+            test_hashed.show(truncate=False)
+            
+            #making a pipeline
+            classifier= LogisticRegression(maxIter=20, regParam=0.000, elasticNetParam=0.000)
+            stages= [hasher, classifier]
+            pipeline = Pipeline(stages=stages)
+            model = pipeline.fit(train)
+            predictions = model.transform(test)
+            predictions.cache()
+            #AUC-ROC
+            evaluator = BinaryClassificationEvaluator(rawPredictionCol="rawPrediction", metricName='areaUnderROC')
+            print(f'Test AUC-ROC: {evaluator.evaluate(predictions)}')
+            
+            return train_hashed, test_hashed
+        except Exception as e:
+            print(f"An error occurred during hashing: {e}")
 
     def stop_spark_session(self):
         if self.spark is not None:
@@ -145,10 +193,14 @@ if __name__ == '__main__':
     train, test = processor.train_test_data(df)
 
     # One-hot encode the categorical variables
-    train_encoded, test_encoded = processor.one_hot_encode(train, test)
+    train_encoded, test_encoded, categorical = processor.one_hot_encode(train, test)
+    processor.hashing_method(train, test, categorical)
 
     # Train a logistic regression model and evaluate it
     processor.train_test_logic_regression_mode(train_encoded, test_encoded)
+
+    # Hashing method
+    train_hashed, test_hashed = processor.hashing_method(train, test, categorical)
 
     # Stop the Spark session
     processor.stop_spark_session()
